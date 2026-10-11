@@ -30,4 +30,10 @@ sugar <PATH: str> <TOP_K: int> <DEPTH: [-deep | -light]>
 
 **DEPTH**: [-deep | -light] --> sets a range of subdirs to look into (*deep* = 2-6; *light* = 2-4)
 
+## License
+No.
+
+## Author
+FLMxN / mephisto
+
 Made in approximately 1 business day. For funsies. Or because I suck at storage management.

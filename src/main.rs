@@ -58,15 +58,16 @@ fn normalize(values: &[u64]) -> Vec<usize> {
         .collect()
 }
 
-fn add_size(sizes: &mut HashMap<PathBuf, u64>, path: PathBuf, size: u64) -> io::Result<()> {
-    let total = sizes.entry(path).or_insert(0);
-    *total = total
-        .checked_add(size)
-        .ok_or_else(|| io::Error::other("directory size exceeds u64"))?;
-    Ok(())
+fn wanted_depth(root: &Path, dir: &Path, min_depth: usize, max_depth: usize) -> bool {
+    dir.strip_prefix(root)
+        .map(|rel| {
+            let depth = rel.components().count();
+            (min_depth..=max_depth).contains(&depth)
+        })
+        .unwrap_or(false)
 }
 
-fn get_sizes(path: &Path) -> io::Result<HashMap<PathBuf, u64>> {
+fn get_sizes(path: &Path, min_depth: usize, max_depth: usize) -> io::Result<HashMap<PathBuf, u64>> {
     if !path.metadata()?.is_dir() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -75,31 +76,51 @@ fn get_sizes(path: &Path) -> io::Result<HashMap<PathBuf, u64>> {
     }
 
     WalkDir::new(path)
+        .follow_links(false)
         .into_iter()
         .par_bridge()
+        .filter_map(Result::ok)
         .try_fold(HashMap::new, |mut sizes, entry| {
-            let entry = entry.map_err(io::Error::other)?;
             if entry.file_type().is_dir() {
-                sizes.entry(entry.path().to_path_buf()).or_insert(0);
-            } else if entry.file_type().is_file() {
-                let size = entry.metadata().map_err(io::Error::other)?.len();
-                let mut parent = entry.path().parent();
-                while let Some(directory) = parent {
-                    if !directory.starts_with(path) {
-                        break;
-                    }
-                    add_size(&mut sizes, directory.to_path_buf(), size)?;
-                    if directory == path {
-                        break;
-                    }
-                    parent = directory.parent();
+                if wanted_depth(path, entry.path(), min_depth, max_depth) {
+                    sizes.entry(entry.path().to_path_buf()).or_insert(0);
                 }
+                return Ok(sizes);
             }
+
+            if !entry.file_type().is_file() {
+                return Ok(sizes);
+            }
+
+            let Ok(meta) = entry.metadata() else {
+                return Ok(sizes);
+            };
+
+            let size = meta.len();
+
+            let mut parent = entry.path().parent();
+            while let Some(dir) = parent {
+                if !dir.starts_with(path) {
+                    break;
+                }
+
+                if wanted_depth(path, dir, min_depth, max_depth) {
+                    sizes
+                        .entry(dir.to_path_buf())
+                        .and_modify(|total: &mut u64| *total = total.saturating_add(size))
+                        .or_insert(size);
+                }
+
+                parent = dir.parent();
+            }
+
             Ok(sizes)
         })
         .try_reduce(HashMap::new, |mut left, right| {
-            for (path, size) in right {
-                add_size(&mut left, path, size)?;
+            for (p, s) in right {
+                left.entry(p)
+                    .and_modify(|total: &mut u64| *total = total.saturating_add(s))
+                    .or_insert(s);
             }
             Ok(left)
         })
@@ -107,19 +128,31 @@ fn get_sizes(path: &Path) -> io::Result<HashMap<PathBuf, u64>> {
 
 fn main() {
     let mut paths: Vec<_> = env::args_os().skip(1).collect();
+    let verbose: char = match paths.pop().unwrap().to_str() {
+        Some("-deep") => 'd',
+        Some("-light") => 'l',
+        _ => 'n' 
+    };
     let count = paths
         .pop()
         .and_then(|s| s.to_str().and_then(|s| s.parse().ok()))
         .unwrap_or(10);
-    if paths.is_empty() {
-        eprintln!("Usage: sugar <PATH> [PATH ...]");
+
+    if paths.is_empty() || verbose == 'n' {
+        eprintln!("Usage: sugar <PATH: str> <TOP_K: int> <DEPTH: [-deep | -light]>");
         std::process::exit(2);
     }
+
+    let (min_depth, max_depth): (usize, usize) = match verbose {
+        'd' => (2, 6),
+        'l' => (2, 4),
+        _ => (2, 4)
+    };
 
     let sizes = paths
         .par_iter()
         .map(|path| {
-            get_sizes(Path::new(path)).map_err(|error| {
+            get_sizes(Path::new(path), min_depth, max_depth).map_err(|error| {
                 io::Error::new(
                     error.kind(),
                     format!("{}: {error}", Path::new(path).display()),
@@ -137,16 +170,19 @@ fn main() {
     match sizes {
         Ok(sizes) => {
             let mut directories = BinaryHeap::new();
+
             for (path, size) in sizes {
                 directories.push(Reverse(DirectoryInfo { size, path }));
                 if directories.len() > count {
                     directories.pop();
                 }
             }
+
             let mut directories: Vec<_> = directories
                 .into_iter()
                 .map(|Reverse(directory)| directory)
                 .collect();
+
             directories.sort_by(|left, right| {
                 right
                     .size
@@ -158,24 +194,32 @@ fn main() {
                 .iter()
                 .map(|directory| directory.size)
                 .collect::<Vec<_>>();
+
             let mut nsizes = normalize(&sizes);
             nsizes.reverse();
 
             println!("SIZE \t\t\t\tDIRECTORY");
+
             for directory in directories {
                 let filename = directory.path.to_str().unwrap_or("<invalid UTF-8>");
                 let characters: Vec<_> = filename.chars().collect();
                 let progressbar = "▓".repeat(nsizes.pop().unwrap_or(1) as usize);
+
                 let slice = if characters.len() > 58 {
                     characters[..23].iter().collect::<String>()
                         + "..."
                         + &characters[(characters.len() - 32)..]
                             .iter()
                             .collect::<String>()
-                        + " " + &progressbar
+                        + " "
+                        + &progressbar
                 } else {
-                    String::from(filename) + " " + &" ".repeat(58-characters.len()) + &progressbar
+                    String::from(filename)
+                        + " "
+                        + &" ".repeat(58 - characters.len())
+                        + &progressbar
                 };
+
                 println!("{} \t\t\t{}", convert(directory.size), slice);
             }
         }

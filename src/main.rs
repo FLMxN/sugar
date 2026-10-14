@@ -128,6 +128,11 @@ fn get_sizes(path: &Path, min_depth: usize, max_depth: usize) -> io::Result<Hash
 
 fn main() {
     let mut paths: Vec<_> = env::args_os().skip(1).collect();
+    if paths.is_empty() {
+        eprintln!("Usage: sugar <PATH: str> <TOP_K: int> <DEPTH: [-deep | -light]>");
+        std::process::exit(2);
+    }
+
     let verbose: char = match paths.pop().unwrap().to_str() {
         Some("-deep") => 'd',
         Some("-light") => 'l',
@@ -138,7 +143,7 @@ fn main() {
         .and_then(|s| s.to_str().and_then(|s| s.parse().ok()))
         .unwrap_or(10);
 
-    if paths.is_empty() || verbose == 'n' {
+    if verbose == 'n' {
         eprintln!("Usage: sugar <PATH: str> <TOP_K: int> <DEPTH: [-deep | -light]>");
         std::process::exit(2);
     }

@@ -31,7 +31,7 @@ sugar <PATH: str> <TOP_K: int> <DEPTH: [-deep | -light]>
 **DEPTH**: [-deep | -light] --> sets a range of subdirs to look into (*deep* = 2-6; *light* = 2-4)
 
 ## License
-No.
+GNU Public License 3.0
 
 ## Author
 FLMxN / mephisto

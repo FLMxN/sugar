@@ -1,6 +1,6 @@
 # Sugar
 
-Sugar is a blazingly fast CLI tool for retrieving storage information on Windows 10/11 machines, written in Rust.
+Sugar is a blazingly fast cross-platform CLI tool for retrieving storage information, written in Rust.
 
 ## Features
 
